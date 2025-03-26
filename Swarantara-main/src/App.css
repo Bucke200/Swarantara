@@ -3,12 +3,13 @@
   margin: 0 auto;
   padding: 2rem;
   text-align: center;
+  background-color: transparent;
 }
 
 .app {
   width: 100%;
   min-height: 100vh;
-  background-color: #fff9f0;
+  background-color: transparent;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   display: flex;
   flex-direction: column;
@@ -23,7 +24,7 @@
 }
 
 body {
-  color: #333;
+  color: rgba(255, 255, 255, 0.9);
   line-height: 1.6;
 }
 
