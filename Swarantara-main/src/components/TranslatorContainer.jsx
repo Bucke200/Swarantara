@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { speechToText, translateText, textToSpeech } from "../services/apiService"
 import "./TranslatorContainer.css"
 import { ArrowRight, Mic, Play, RotateCcw } from "lucide-react"
@@ -15,11 +15,67 @@ const TranslatorContainer = () => {
   const [audioUrl, setAudioUrl] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [status, setStatus] = useState("idle") // idle, listening, translating, ready
+  const [isSpacebarPressed, setIsSpacebarPressed] = useState(false)
 
   const mediaRecorderRef = useRef(null)
   const audioChunksRef = useRef([])
   const inputAudioRef = useRef(null)
   const outputAudioRef = useRef(null)
+
+  // Space bar recording handlers
+  useEffect(() => {
+    let recordingTimeout = null;
+    const MIN_RECORDING_TIME = 2000; // Increase to 2 seconds minimum
+    
+    const handleKeyDown = (e) => {
+      // Only trigger if it's the space bar key and we're not already recording
+      // Also check if target is not an input, textarea, or select to avoid conflicts
+      if (e.code === 'Space' && !isRecording && 
+          !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+        e.preventDefault(); // Prevent page scroll
+        setIsSpacebarPressed(true);
+        startRecording();
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      // Only trigger if it's the space bar key and we're currently recording
+      if (e.code === 'Space' && isRecording) {
+        e.preventDefault();
+        setIsSpacebarPressed(false);
+        
+        // Only stop if we've been recording for the minimum time
+        const recordingDuration = Date.now() - mediaRecorderRef.current?.startTime;
+        console.log(`Recording duration: ${recordingDuration}ms, chunks: ${audioChunksRef.current.length}`);
+        
+        if (recordingDuration >= MIN_RECORDING_TIME) {
+          stopRecording();
+        } else {
+          // If released too quickly, wait until minimum time has passed
+          const remainingTime = MIN_RECORDING_TIME - recordingDuration;
+          console.log(`Recording too short, continuing for ${remainingTime}ms more`);
+          
+          // Show feedback to user
+          setStatus("listening_min_time");
+          
+          recordingTimeout = setTimeout(() => {
+            stopRecording();
+          }, remainingTime);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      if (recordingTimeout) {
+        clearTimeout(recordingTimeout);
+      }
+    };
+  }, [isRecording]); // Re-add listeners when recording state changes
 
   // Language options
   const languages = [
@@ -83,6 +139,9 @@ const TranslatorContainer = () => {
         audioBitsPerSecond: 16000,
       })
 
+      // Track the start time for minimum recording duration
+      mediaRecorder.startTime = Date.now();
+      
       mediaRecorderRef.current = mediaRecorder
       audioChunksRef.current = []
 
@@ -93,7 +152,8 @@ const TranslatorContainer = () => {
         }
       }
 
-      mediaRecorder.start(1000) // Collect data every second
+      // Start collecting data more frequently (every 200ms)
+      mediaRecorder.start(200)
       console.log("Recording started")
     } catch (error) {
       console.error("Error starting recording:", error)
@@ -128,69 +188,98 @@ const TranslatorContainer = () => {
       cleanupPreviousUrl()
 
       const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" })
-      console.log("Recording complete. Total size:", audioBlob.size, "bytes")
+      console.log("Recording complete. Total size:", audioBlob.size, "bytes", "Chunks:", audioChunksRef.current.length)
 
-      if (audioBlob.size === 0) {
-        throw new Error("No audio recorded. Please try again and speak clearly.")
+      // Add more detailed logging for debugging
+      audioChunksRef.current.forEach((chunk, index) => {
+        console.log(`Chunk ${index}: ${chunk.size} bytes`)
+      })
+
+      if (audioBlob.size < 1000) { // Less than 1KB is likely empty or too small
+        throw new Error("No audio recorded or audio too short. Please try again and speak clearly.")
       }
 
       // Convert to WAV format
       const audioContext = new (window.AudioContext || window.webkitAudioContext)()
       const arrayBuffer = await audioBlob.arrayBuffer()
 
-      // Decode the audio data
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+      console.log("Audio ArrayBuffer size:", arrayBuffer.byteLength)
 
-      // Create WAV file
-      const wavBlob = await audioBufferToWav(audioBuffer)
-      console.log("Converted to WAV. Size:", wavBlob.size, "bytes")
+      try {
+        // Decode the audio data
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+        console.log("Audio decoded successfully. Duration:", audioBuffer.duration, "seconds")
 
-      // Store input audio for playback
-      const inputAudioUrl = URL.createObjectURL(wavBlob)
-      if (inputAudioRef.current) {
-        inputAudioRef.current.src = inputAudioUrl
-      }
+        // Create WAV file
+        const wavBlob = await audioBufferToWav(audioBuffer)
+        console.log("Converted to WAV. Size:", wavBlob.size, "bytes")
 
-      // Step 1: Convert speech to text
-      console.log("Starting speech-to-text conversion...")
-      const sourceLanguageCode = `${inputLanguage}-IN`
-      const text = await speechToText(wavBlob, sourceLanguageCode)
-      if (!text) {
-        throw new Error("No text was transcribed from the audio. Please try again and speak clearly.")
-      }
-      console.log("Speech-to-text result:", text)
-      setTranscript(text)
-
-      // Step 2: Translate text
-      console.log("Starting translation...")
-      const targetLanguageCode = outputLanguage
-      const translatedText = await translateText(text, sourceLanguageCode, targetLanguageCode)
-      if (!translatedText) {
-        throw new Error("Translation failed. Please try again later.")
-      }
-      console.log("Translation result:", translatedText)
-      setTranslation(translatedText)
-
-      // Step 3: Convert translated text to speech
-      console.log("Starting text-to-speech conversion...")
-      const ttsBlob = await textToSpeech(translatedText, targetLanguageCode)
-      if (!ttsBlob || ttsBlob.size === 0) {
-        throw new Error("Text-to-speech conversion failed. Please try again later.")
-      }
-      console.log("Text-to-speech result received, size:", ttsBlob.size)
-
-      // Create URL for audio playback
-      const url = URL.createObjectURL(ttsBlob)
-      console.log("Created audio URL:", url)
-
-      // Set the audio URL with a small delay
-      setTimeout(() => {
-        setAudioUrl(url)
-        if (outputAudioRef.current) {
-          outputAudioRef.current.src = url
+        // Store input audio for playback
+        const inputAudioUrl = URL.createObjectURL(wavBlob)
+        if (inputAudioRef.current) {
+          inputAudioRef.current.src = inputAudioUrl
         }
-        setStatus("ready")
-      }, 100)
+
+        // Step 1: Convert speech to text
+        console.log("Starting speech-to-text conversion...")
+        const sourceLanguageCode = `${inputLanguage}-IN`
+        const text = await speechToText(wavBlob, sourceLanguageCode)
+        if (!text) {
+          throw new Error("No text was transcribed from the audio. Please try again and speak clearly.")
+        }
+        console.log("Speech-to-text result:", text)
+        setTranscript(text)
+
+        // Step 2: Translate text
+        console.log("Starting translation...")
+        const targetLanguageCode = outputLanguage
+        const translatedText = await translateText(text, sourceLanguageCode, targetLanguageCode)
+        if (!translatedText) {
+          throw new Error("Translation failed. Please try again later.")
+        }
+        console.log("Translation result:", translatedText)
+        setTranslation(translatedText)
+
+        // Step 3: Convert translated text to speech
+        console.log("Starting text-to-speech conversion...")
+        const ttsBlob = await textToSpeech(translatedText, targetLanguageCode)
+        if (!ttsBlob || ttsBlob.size === 0) {
+          throw new Error("Text-to-speech conversion failed. Please try again later.")
+        }
+        console.log("Text-to-speech result received, size:", ttsBlob.size)
+
+        // Create URL for audio playback
+        const url = URL.createObjectURL(ttsBlob)
+        console.log("Created audio URL:", url)
+
+        // Set the audio URL with a small delay
+        setTimeout(() => {
+          setAudioUrl(url)
+          if (outputAudioRef.current) {
+            outputAudioRef.current.src = url
+          }
+          setStatus("ready")
+        }, 100)
+      } catch (err) {
+        console.error("Detailed error:", err)
+
+        // Format a user-friendly error message
+        let userErrorMessage = "An error occurred during the translation process. Please try again."
+
+        if (err.message.includes("API error:")) {
+          userErrorMessage = err.message
+        } else if (err.message.includes("format")) {
+          userErrorMessage =
+            "The translation service returned an unexpected format. Please try again or select a different language."
+        } else if (err.message) {
+          userErrorMessage = `Error: ${err.message}`
+        }
+
+        setError(userErrorMessage)
+        setStatus("idle")
+      } finally {
+        setLoading(false)
+      }
     } catch (err) {
       console.error("Detailed error:", err)
 
@@ -208,8 +297,6 @@ const TranslatorContainer = () => {
 
       setError(userErrorMessage)
       setStatus("idle")
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -316,7 +403,7 @@ const TranslatorContainer = () => {
                 )}
               </>
             ) : (
-              <p className="placeholder-text">Hold the microphone button and speak...</p>
+              <p className="placeholder-text">Hold the space bar and speak...</p>
             )}
           </div>
         </div>
@@ -365,7 +452,8 @@ const TranslatorContainer = () => {
       {error && <div className="error-message">{error}</div>}
 
       <div className="status-indicator">
-        {status === "listening" && <span>Listening...</span>}
+        {status === "listening" && <span>Listening... {isSpacebarPressed ? "(Hold spacebar)" : ""}</span>}
+        {status === "listening_min_time" && <span>Continue recording... (minimum time)</span>}
         {status === "translating" && <span>Translating...</span>}
         {status === "ready" && <span>Translation Ready</span>}
       </div>
@@ -380,7 +468,7 @@ const TranslatorContainer = () => {
         >
           <Mic size={24} />
         </button>
-        <p className="record-label">{isRecording ? "Click to stop" : "Click to speak"}</p>
+        <p className="record-label">Hold space bar to speak or click</p>
 
         {(transcript || translation) && (
           <button className="reset-button" onClick={resetTranslation} aria-label="Reset translation">
