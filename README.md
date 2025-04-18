@@ -72,4 +72,29 @@ trannslatorr/
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Deployment
+
+**Live Demo:** https://swarantara-swart.vercel.app/
+
+### Deploy on Vercel
+
+1. Push your code to GitHub (e.g., Bucke200/Swarantara).
+2. Install the Vercel CLI:
+   ```bash
+   npm install -g vercel
+   ```
+3. Log in to Vercel:
+   ```bash
+   vercel login
+   ```
+4. From your project root:
+   ```bash
+   cd c:/projects/Swarantara-master/Swarantara-main
+   vercel --prod
+   ```
+5. Add your environment variable:
+   ```bash
+   vercel env add VITE_SARVAM_API_KEY production
+   ```
